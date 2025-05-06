@@ -961,10 +961,10 @@ Resources:
     Type: AWS::CloudFormation::Stack
     Properties:
       Parameters:
-        CodeCommitRepoName: 
-          !GetAtt [ pipelineHelper, Outputs.MoodleRepoName ]          
-        CodeCommitRepoArn: 
-          !GetAtt [ pipelineHelper, Outputs.MoodleRepoArn ]
+        GitS3RemoteRepoName: 
+          !GetAtt [ pipelineHelper, Outputs.MoodleRepoBucketName ]          
+        GitS3RemoteRepoBucketArn: 
+          !GetAtt [ pipelineHelper, Outputs.MoodleRepoBucketArn ]
         BranchName: 'main'
         AppAutoScalingGroupName:
           !GetAtt [ webapp, Outputs.WebAutoScalingGroupName ]
@@ -984,10 +984,10 @@ Resources:
     Type: AWS::CloudFormation::Stack
     Properties:
       Parameters:
-        CodeCommitRepoName: 
-          !GetAtt [ pipelineHelper, Outputs.MoodleRepoName ]          
-        CodeCommitRepoArn: 
-          !GetAtt [ pipelineHelper, Outputs.MoodleRepoArn ]
+        GitS3RemoteRepoName: 
+          !GetAtt [ pipelineHelper, Outputs.MoodleRepoBucketName ]          
+        GitS3RemoteRepoBucketArn: 
+          !GetAtt [ pipelineHelper, Outputs.MoodleRepoBucketArn ]
         BranchName: 'main'
         AppAutoScalingGroupName:
           !GetAtt [ webapp, Outputs.WebAutoScalingGroupName ]
@@ -1083,11 +1083,10 @@ Outputs:
                   !Ref IsMoodleSetupCompletedParam, '/description?region=',!Ref "AWS::Region" ] ]
   
   MoodleGitRepo:
-    Description: CodeCommit git repository having Moodle source code
+    Description: git-remote-s3 git repository having Moodle source code
     Value: 
-      !Join [ '', [ 'https://',!Ref "AWS::Region", '.console.aws.amazon.com/codesuite/codecommit/repositories/',
-              !Ref AWS::StackName, '-Repo/browse?region=',!Ref "AWS::Region" ] ]
-    
+      !Join [ '', [ 's3+zip://' , !GetAtt [ pipelineHelper, Outputs.MoodleRepoBucketName ] , '/' , !Ref AWS::StackName ] ]
+
   MoodleCodePipeline:
     Description: Moodle Code pipeline allows you to deploy your changes
     Value: 

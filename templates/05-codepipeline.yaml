@@ -3,13 +3,13 @@ AWSTemplateFormatVersion: 2010-09-09
 Description: Moodle deployment pipeline
 
 Parameters: 
-  CodeCommitRepoName: 
+  GitS3RemoteRepoName: 
     Type: "String"
     Default: "Moodle Repo"
-    Description: Moodle CodeCommit repo name
-  CodeCommitRepoArn: 
+    Description: Moodle git-remote-s3 repo name
+  GitS3RemoteRepoBucketArn: 
     Type: "String"
-    Description: Moodle CodeCommit repo Arn
+    Description: Moodle git-remote-s3 repo Arn
   BranchName:
     Type: "String"
     Default: "main"
@@ -135,17 +135,14 @@ Resources:
               - !Ref CodeArtifactS3BucketArn
               - !Join [ '', [ !Ref CodeArtifactS3BucketArn,'/*' ] ]
           - Effect: Allow
-            Action:
-              - codecommit:GetRepository
-              - codecommit:ListBranches
-              - codecommit:GitPull
-              - codecommit:GetBranch
-              - codecommit:GetCommit
-              - codecommit:UploadArchive
-              - codecommit:GetUploadArchiveStatus
-            Resource:
-              - !Ref CodeCommitRepoArn
-              - !Join [ '', [ !Ref CodeCommitRepoArn,'/*' ] ]
+            Action: 
+            - s3:GetObject
+            - s3:GetObjectVersion
+            - s3:GetBucketVersioning
+            - s3:ListBucket
+            Resource: 
+            - !Ref GitS3RemoteRepoBucketArn
+            - !Sub "${GitS3RemoteRepoBucketArn}/*"
 
   # The CI/CD pipeline stitching the full mechanism together
   MoodleAppPipeline:
@@ -155,10 +152,10 @@ Resources:
       RoleArn: !GetAtt MoodlePipelineRole.Arn
       Stages:
         - Actions:
-            # Initiate Pipeline from CodeCommit
+            # Initiate Pipeline from git-remote-s3
             - ActionTypeId: 
                 Version: '1'
-                Provider: CodeCommit
+                Provider: S3
                 Category: Source
                 Owner: AWS
               OutputArtifacts:
@@ -166,14 +163,14 @@ Resources:
               InputArtifacts: []
               Name: source
               Configuration:
-                RepositoryName: !Ref CodeCommitRepoName
-                BranchName: !Ref BranchName
+                S3Bucket: !Ref GitS3RemoteRepoName
+                S3ObjectKey: !Sub ${ProjectName}/refs/heads/main/repo.zip
                 PollForSourceChanges: 'false'
               RunOrder: 1
               Namespace: SourceVars
           Name: Initiate
         - Actions:
-            # Creating CodeDeploy for Deploying Moodle codebase from CodeCommit repo
+            # Creating CodeDeploy for Deploying Moodle codebase from git-remote-s3 repo
             - ActionTypeId: 
                 Category: Deploy
                 Owner: AWS
