@@ -1,7 +1,7 @@
 ---
 AWSTemplateFormatVersion: 2010-09-09
 
-Description: This templates helps creating CodeCommit repo, S3 Bucket and update repo with Moodle code & configurations.
+Description: This templates helps creating git-remote-s3 repo, S3 Bucket and update repo with Moodle code & configurations.
 
 Parameters:
   PipelineSecurityGroup:
@@ -182,36 +182,34 @@ Parameters:
     Type: String
 
 Conditions:
-  NumberOfSubnets1:
-      !Equals [ 1, !Ref NumberOfSubnets ]
-  NumberOfSubnets2:
-      !Equals [ 2, !Ref NumberOfSubnets ]
-  NumberOfSubnets3:
-      !Equals [ 3, !Ref NumberOfSubnets ]
-  Subnet0: !Or
-    - !Condition NumberOfSubnets1
-    - !Condition NumberOfSubnets2
-    - !Condition NumberOfSubnets3
-  Subnet1: !Or
-    - !Condition NumberOfSubnets2
-    - !Condition NumberOfSubnets3
-  Subnet2: !Condition NumberOfSubnets3
+  NumberOfSubnets1: !Equals [ 1, !Ref NumberOfSubnets ]
+  NumberOfSubnets2: !Equals [ 2, !Ref NumberOfSubnets ]
   UsingGraviton2Ami:  !Or
-    - !Equals ["t4",!Select [0, !Split [ "g.", !Ref WebInstanceType]]]
-    - !Equals ["c6",!Select [0, !Split [ "g.", !Ref WebInstanceType]]]
-    - !Equals ["c7",!Select [0, !Split [ "g.", !Ref WebInstanceType]]]
-    - !Equals ["m6",!Select [0, !Split [ "g.", !Ref WebInstanceType]]]
-    - !Equals ["m7",!Select [0, !Split [ "g.", !Ref WebInstanceType]]]
-    - !Equals ["r6",!Select [0, !Split [ "g.", !Ref WebInstanceType]]]
-    - !Equals ["r7",!Select [0, !Split [ "g.", !Ref WebInstanceType]]]
+    - !Equals ["t4",!Select [0, !Split [ "g.", !Ref InstanceType]]]
+    - !Equals ["c6",!Select [0, !Split [ "g.", !Ref InstanceType]]]
+    - !Equals ["c7",!Select [0, !Split [ "g.", !Ref InstanceType]]]
+    - !Equals ["m6",!Select [0, !Split [ "g.", !Ref InstanceType]]]
+    - !Equals ["m7",!Select [0, !Split [ "g.", !Ref InstanceType]]]
+    - !Equals ["r6",!Select [0, !Split [ "g.", !Ref InstanceType]]]
+    - !Equals ["r7",!Select [0, !Split [ "g.", !Ref InstanceType]]]
 
 Resources:
-########################### TODO put this in the codepipeline template
-  MoodleRepo:
-    Type: AWS::CodeCommit::Repository
+  # This bucket is being used as the repo for git-s3-remote
+  MoodleGitBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: RetainExceptOnCreate
     Properties:
-      RepositoryName: !Sub '${ProjectName}-Repo'
-      RepositoryDescription: This is Moodle CodeCommit repository.
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: AES256
 
   #This bucket is being used for storing Code artifacts for deployment.
   CodeArtifactS3Bucket:
@@ -268,20 +266,14 @@ Resources:
             Resource: 
              !Sub  'arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${ProjectName}-Pipeline'
           - Effect: Allow
-            Action:
-              - codecommit:GitPull
-              - codecommit:GitPush
-              - codecommit:CreateBranch
-              - codecommit:CreateCommit
-              - codecommit:GetRepository
-              - codecommit:Get*
-              - codecommit:List*
-              - codecommit:PutFile
-              - codecommit:UploadArchive
-              - codecommit:GetUploadArchiveStatus
-            Resource:
-              - !GetAtt MoodleRepo.Arn
-              - !Join [ "", [ !GetAtt MoodleRepo.Arn, "/*" ] ]
+            Action: 
+              - s3:PutObject
+              - s3:GetObject
+              - s3:DeleteObject
+            Resource: !Sub "${MoodleGitBucket.Arn}/*"
+          - Effect: Allow
+            Action: s3:ListBucket
+            Resource: !GetAtt MoodleGitBucket.Arn
 
   PipelineHelperASGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
@@ -297,7 +289,7 @@ Resources:
       DesiredCapacity: 1
       Tags:
         - Key: Name
-          Value: !Join [ '', [ 'Moodle Pipeline Helper ', !GetAtt MoodleRepo.Name, ' ...will auto terminate' ] ]
+          Value: !Join [ '', [ 'Moodle Pipeline Helper s3+zip://' , !Ref MoodleGitBucket , '/' , !Ref ProjectName , ' ...will auto terminate' ] ]
           PropagateAtLaunch: true
       VPCZoneIdentifier:
         !If
@@ -568,11 +560,11 @@ Resources:
               content: !Sub |
                   #!/bin/bash -x
 
+                  python3 -m pip install git-remote-s3
+                  export PATH=$PATH:~/.local/bin
+
                   git config --system user.name 'AWS User'
                   git config --system user.email noreply@amazon.com
-
-                  git config --system credential.helper '!aws codecommit credential-helper $@'
-                  git config --system credential.UseHttpPath true
 
                   DIR="/tmp/moodle"
                   if [ -d "$DIR" ]; then
@@ -590,7 +582,7 @@ Resources:
                     git checkout -b main
                     git add .
                     git commit -m "Moodle original code commit."
-                    git remote add origin ${MoodleRepo.CloneUrlHttp}
+                    git remote add origin s3+zip://${MoodleGitBucket}/${ProjectName}
                   fi
 
                   #Added code scripts for CodePipeline
@@ -688,7 +680,7 @@ Resources:
             #!/bin/bash -xe
             sudo systemctl enable amazon-ssm-agent
             sudo systemctl start amazon-ssm-agent
-            dnf install -y git
+            dnf install -y git pip
 
             /opt/aws/bin/cfn-init --configsets moodle_git_config --verbose --stack ${AWS::StackName} --resource PipelineHelperLaunchTemplate --region ${AWS::Region}
             /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource PipelineHelperASGroup --region ${AWS::Region}
@@ -698,7 +690,7 @@ Outputs:
     Value: !GetAtt CodeArtifactS3Bucket.Arn
   CodeArtifactS3BucketName:
     Value: !Ref CodeArtifactS3Bucket
-  MoodleRepoName:
-    Value: !GetAtt MoodleRepo.Name
-  MoodleRepoArn:
-    Value: !GetAtt MoodleRepo.Arn
+  MoodleRepoBucketName:
+    Value: !Ref MoodleGitBucket
+  MoodleRepoBucketArn:
+    Value: !GetAtt MoodleGitBucket.Arn
