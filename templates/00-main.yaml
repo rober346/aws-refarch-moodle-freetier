@@ -66,6 +66,9 @@ Metadata:
         default: Moodle
       Parameters:
         - MoodleLocale
+        - MoodleAdminUser
+        - MoodleAdminPassword
+        - MoodleAdminEmail
     ParameterLabels:
       DeploymentLocation:
         default: "Location to deploy from (S3 URL without trailing slash, e.g.: https://<my-bucket>.s3.<region>.amazonaws.com)"
@@ -142,7 +145,7 @@ Parameters:
   DeploymentLocation:
     Description: Templates location (S3 URL). By default, uses AWS provided templates.
     Type: String
-    Default: https://s3.amazonaws.com/aws-refarch/moodle/4.4/templates
+    Default: https://<YOUR_BUCKET_NAME>.s3.<YOUR_REGION>.amazonaws.com/templates
   PublicAlbAcmCertificate:
     AllowedPattern: ^$|(arn:aws:acm:)([a-z0-9/:-])*([a-z0-9])$
     Description: '[ Optional ] The AWS Certification Manager certificate ARN for the ALB certificate - this certificate should be created in the region you wish to run the ALB and must reference the domain name you use below.'
@@ -158,15 +161,22 @@ Parameters:
     AllowedValues:
       - MySQL
       - PostgreSQL
-    Default: PostgreSQL
+    Default: MySQL
     Description: Indicates whether to use Aurora MySQL or PostgreSQL.
     Type: String
   DatabaseUseServerless:
     AllowedValues:
       - true
       - false
-    Default: true
+    Default: false
     Description: Indicates whether the database should use the serverless engines.
+    Type: String
+  DeployPipeline:
+    AllowedValues:
+      - true
+      - false
+    Default: false
+    Description: Set to true only if CodeDeploy is available in your account. Free Tier accounts must leave this false.
     Type: String
   DatabaseMinCapacity:
     AllowedValues:
@@ -198,6 +208,7 @@ Parameters:
     Type: String
   DatabaseInstanceType:
     AllowedValues:
+      - db.t3.micro
       - db.t3.medium
       - db.t3.large
       - db.t4g.medium
@@ -232,7 +243,7 @@ Parameters:
       - db.r6gd.12xlarge
       - db.r6gd.16xlarge
     ConstraintDescription: Must be a valid Aurora RDS instance type.
-    Default: db.r6g.large
+    Default: db.t3.micro
     Description: Amazon RDS database instance type (only used if non-serverless)
     Type: String
   DatabaseMasterUsername:
@@ -272,7 +283,7 @@ Parameters:
     AllowedValues:
       - true
       - false
-    Default: true
+    Default: false
     Description: Set to true to deploy ElastiCache session cache using serverless approach. Set to false to use instances instead.
     Type: String
   SessionCacheNodeType:
@@ -330,7 +341,7 @@ Parameters:
       - cache.r6gd.12xlarge
       - cache.r6gd.16xlarge
     ConstraintDescription: Must be a valid Amazon ElastiCache node type.
-    Default: cache.r6g.large
+    Default: cache.t3.micro
     Description: The Amazon ElastiCache cluster node type.
     Type: String
   UseApplicationCacheBoolean:
@@ -344,7 +355,7 @@ Parameters:
     AllowedValues:
       - true
       - false
-    Default: true
+    Default: false
     Description: Indicates whether to use serverless ElastiCache for application.
     Type: String
   ApplicationCacheNodeType:
@@ -402,7 +413,7 @@ Parameters:
       - cache.r6gd.12xlarge
       - cache.r6gd.16xlarge
     ConstraintDescription: Must be a valid Amazon ElastiCache node type.
-    Default: cache.r6g.large
+    Default: cache.t3.micro
     Description: The Amazon ElastiCache cluster node type.
     Type: String
   WebAsgMax:
@@ -529,7 +540,7 @@ Parameters:
       - c7g.12xlarge
       - c7g.16xlarge
     ConstraintDescription: Must be a valid Amazon EC2 instance type.
-    Default: c7g.xlarge
+    Default: t3.micro
     Description: The Amazon EC2 instance type for your web instances.
     Type: String
   HostedZoneName:
@@ -629,8 +640,26 @@ Parameters:
     Type: String
     Default: hello@yourdomain.com
   MoodleDirectDownloadURL:
-    Default: "https://download.moodle.org/download.php/direct/stable404/moodle-4.4.tgz"
+    Default: "https://download.moodle.org/download.php/direct/stable405/moodle-latest-405.tgz"
     Description: Specifies the TGZ Moodle direct download URL
+    Type: String
+  MoodleAdminUser:
+    AllowedPattern: ^([a-zA-Z0-9]*)$
+    Default: admin
+    Description: Moodle admin username
+    Type: String
+  MoodleAdminPassword:
+    AllowedPattern: ^[a-zA-Z0-9!@#%^&*()\-_+=.,;:]{8,}$
+    ConstraintDescription: "Min 8 chars. Allowed: letters, numbers, !@#%^&*()-_+=.,;: — No spaces, $, quotes or backslashes."
+    Default: <YOUR_ADMIN_PASSWORD>
+    Description: Moodle admin password (min 8 chars, change after first login)
+    MinLength: 8
+    NoEcho: true
+    Type: String
+  MoodleAdminEmail:
+    AllowedPattern: ^[a-zA-Z0-9+_.-]+@[a-zA-Z0-9.-]+$
+    Default: <YOUR_ADMIN_EMAIL>
+    Description: Moodle admin email address
     Type: String
 
 Conditions:
@@ -680,6 +709,16 @@ Conditions:
     !Equals [ true, !Ref DatabaseUseServerless ]
   DeployUsingRDSInstances:
     !Equals [ false, !Ref DatabaseUseServerless ]
+  DeployCodePipeline:
+    !And [
+      !Equals [ false, !Ref DatabaseUseServerless ],
+      !Equals [ true, !Ref DeployPipeline ]
+    ]
+  DeployCodePipelineServerless:
+    !And [
+      !Equals [ true, !Ref DatabaseUseServerless ],
+      !Equals [ true, !Ref DeployPipeline ]
+    ]
   NeedSSL:
     !Or [
     !Equals [ true, !Ref UseCloudFrontBoolean ], #Either CloudFront
@@ -725,7 +764,7 @@ Resources:
         SecretStringTemplate: !Sub '{"username": "${DatabaseMasterUsername}"}'
         GenerateStringKey: 'password'
         PasswordLength: 16
-        ExcludeCharacters: '"@/\'
+        ExcludeCharacters: '"@/\$`'
   
   IsMoodleSetupCompletedParam:
     Type: AWS::SSM::Parameter
@@ -953,11 +992,19 @@ Resources:
         CodeArtifactS3BucketArn: !GetAtt [ pipelineHelper, Outputs.CodeArtifactS3BucketArn]
         ProjectName:
           !Sub '${AWS::StackName}'
+        MoodleDirectDownloadURL: !Ref MoodleDirectDownloadURL
+        PublicAlbDnsName: !GetAtt [ publicalb, Outputs.PublicAlbDnsName ]
+        DatabaseName: !Ref DatabaseName
+        DatabaseType: !Ref DatabaseType
+        MoodleAdminUser: !Ref MoodleAdminUser
+        MoodleAdminPassword: !Ref MoodleAdminPassword
+        MoodleAdminEmail: !Ref MoodleAdminEmail
+        MoodleLocale: !Ref MoodleLocale
       TemplateURL: !Sub '${DeploymentLocation}/04-web.yaml'
 
   codePipeline:
     DependsOn: [webapp, pipelineHelper, rds]
-    Condition: DeployUsingRDSInstances
+    Condition: DeployCodePipeline
     Type: AWS::CloudFormation::Stack
     Properties:
       Parameters:
@@ -980,7 +1027,7 @@ Resources:
 
   codePipelineServerless:
     DependsOn: [webapp, pipelineHelper, rdsserverless]
-    Condition: DeployUsingRDSServerless
+    Condition: DeployCodePipelineServerless
     Type: AWS::CloudFormation::Stack
     Properties:
       Parameters:
