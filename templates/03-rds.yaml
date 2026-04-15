@@ -1,6 +1,6 @@
 ---
 AWSTemplateFormatVersion: 2010-09-09
-Description: Moodle database
+Description: Moodle database (standard RDS, non-Aurora)
 
 Parameters:
   DatabaseType:
@@ -15,6 +15,7 @@ Parameters:
     Type: String
   DatabaseInstanceType:
     AllowedValues:
+      - db.t3.micro
       - db.t3.medium
       - db.t3.large
       - db.t4g.medium
@@ -48,15 +49,15 @@ Parameters:
       - db.r6gd.8xlarge
       - db.r6gd.12xlarge
       - db.r6gd.16xlarge
-    ConstraintDescription: Must be a valid Aurora RDS instance type.
-    Default: db.r6g.large
-    Description: Amazon Aurora RDS database instance type
+    ConstraintDescription: Must be a valid RDS instance type.
+    Default: db.t3.micro
+    Description: Amazon RDS database instance type
     Type: String
   RDSInstanceSecretArn:
     Type: String
   DatabaseName:
     AllowedPattern: ^([a-zA-Z0-9]*)$
-    Description: Amazon Aurora RDS master database name
+    Description: Amazon RDS master database name
     Type: String
   DatabaseSecurityGroup:
     Description: Database security group
@@ -86,45 +87,25 @@ Conditions:
   UseAWS-ManagedCMK: !Equals ['', !Ref DatabaseCmk]
 
 Resources:
-  DatabaseCluster:
-    Type: AWS::RDS::DBCluster
+  DatabaseInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Delete
     Properties:
-      BackupRetentionPeriod: 30
-      DatabaseName: !Ref DatabaseName
+      DBName: !Ref DatabaseName
+      DBInstanceClass: !Ref DatabaseInstanceType
       DBSubnetGroupName: !Ref DataSubnetGroup
-      PubliclyAccessible: false
-      Engine: !If [ UsePostgreSQL, aurora-postgresql, aurora-mysql ]
-      KmsKeyId: !If [ UseAWS-ManagedCMK, !Ref 'AWS::NoValue', !Ref DatabaseCmk ]
+      Engine: !If [ UsePostgreSQL, postgres, mysql ]
+      EngineVersion: !If [ UsePostgreSQL, '16.3', '8.0.45' ]
       MasterUsername: !Join ['', ['{{resolve:secretsmanager:', !Ref RDSInstanceSecretArn, ':SecretString:username}}' ]]
       MasterUserPassword: !Join ['', ['{{resolve:secretsmanager:', !Ref RDSInstanceSecretArn, ':SecretString:password}}' ]]
-      Port: !If [ UsePostgreSQL, 5432, 3306 ]
+      MultiAZ: false
+      PubliclyAccessible: false
       StorageEncrypted: true
-      VpcSecurityGroupIds:
-      - !Ref DatabaseSecurityGroup
-
-  DatabaseInstance0:
-    Type: AWS::RDS::DBInstance
-    DeletionPolicy: Delete
-    Properties:
-      AllowMajorVersionUpgrade: false
-      AutoMinorVersionUpgrade: true
-      PubliclyAccessible: false
-      DBClusterIdentifier: !Ref DatabaseCluster
-      DBInstanceClass: !Ref DatabaseInstanceType
-      DBSubnetGroupName: !Ref DataSubnetGroup
-      Engine: !If [ UsePostgreSQL, aurora-postgresql, aurora-mysql ]
-
-  DatabaseInstance1:
-    Type: AWS::RDS::DBInstance
-    DeletionPolicy: Delete
-    Properties:
-      AllowMajorVersionUpgrade: false
-      AutoMinorVersionUpgrade: true
-      PubliclyAccessible: false
-      DBClusterIdentifier: !Ref DatabaseCluster
-      DBInstanceClass: !Ref DatabaseInstanceType
-      DBSubnetGroupName: !Ref DataSubnetGroup
-      Engine: !If [ UsePostgreSQL, aurora-postgresql, aurora-mysql ]
+      AllocatedStorage: '20'
+      StorageType: gp2
+      VPCSecurityGroups:
+        - !Ref DatabaseSecurityGroup
+      KmsKeyId: !If [ UseAWS-ManagedCMK, !Ref 'AWS::NoValue', !Ref DatabaseCmk ]
 
   DataSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
@@ -139,16 +120,16 @@ Resources:
     Properties:
       Name: !Join [ '', [ '/Moodle/',!Ref ProjectName, '/DB/ClusterEndpoint' ] ]
       Type: String
-      Value: !GetAtt DatabaseCluster.Endpoint.Address
-      Description: Moodle DB Cluster
+      Value: !GetAtt DatabaseInstance.Endpoint.Address
+      Description: Moodle DB Endpoint
 
   DatabaseClusterReadOnlyParam:
     Type: AWS::SSM::Parameter
     Properties:
       Name: !Join [ '', [ '/Moodle/',!Ref ProjectName, '/DB/ClusterReadOnlyEndpoint' ] ]
       Type: String
-      Value: !GetAtt DatabaseCluster.ReadEndpoint.Address
-      Description: Moodle DB Cluster Read only
+      Value: !GetAtt DatabaseInstance.Endpoint.Address
+      Description: Moodle DB Endpoint (read)
 
   DatabaseNameParam:
     Type: AWS::SSM::Parameter
@@ -168,18 +149,18 @@ Resources:
 
 Outputs:
   Database:
-    Value: !Ref DatabaseCluster
+    Value: !Ref DatabaseInstance
   DatabaseName:
     Value: !Ref DatabaseName
   DatabaseInstance0:
-    Value: !Ref DatabaseInstance0
+    Value: !Ref DatabaseInstance
   DatabaseInstance1:
-    Value: !Ref DatabaseInstance1
+    Value: !Ref DatabaseInstance
   DataSubnetGroup:
     Value: !Ref DataSubnetGroup
   DatabaseClusterEndpointAddress:
-    Value: !GetAtt DatabaseCluster.Endpoint.Address
+    Value: !GetAtt DatabaseInstance.Endpoint.Address
   DatabaseClusterEndpointPort:
-    Value: !GetAtt DatabaseCluster.Endpoint.Port
+    Value: !GetAtt DatabaseInstance.Endpoint.Port
   DatabaseClusterReadEndpointAddress:
-    Value: !GetAtt DatabaseCluster.ReadEndpoint.Address  
+    Value: !GetAtt DatabaseInstance.Endpoint.Address
