@@ -1,1 +1,9 @@
 .DS_Store
+
+# Archivos locales con información sensible — no incluir en el fork
+*.csv
+progreso.md
+contexto-proyecto.md
+CLAUDE.md
+.claude/
+bitacoras-terminal/
