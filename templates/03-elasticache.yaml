@@ -127,7 +127,7 @@ Resources:
     Condition: UseMemcached
     Type: AWS::ElastiCache::CacheCluster
     Properties:
-      AZMode: cross-az
+      AZMode: !If [ NumberOfSubnets1, single-az, cross-az ]
       CacheNodeType: !Ref ElastiCacheNodeType
       CacheSubnetGroupName: !Ref ElastiCacheSubnetGroup
       ClusterName: !Ref ElastiCacheClusterName
