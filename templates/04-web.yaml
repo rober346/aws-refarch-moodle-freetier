@@ -163,6 +163,47 @@ Parameters:
     Default: App
     Description: Main stack name
     Type: String
+  MoodleDirectDownloadURL:
+    Default: "https://download.moodle.org/download.php/direct/stable405/moodle-latest-405.tgz"
+    Description: Direct download URL for Moodle TGZ package
+    Type: String
+  PublicAlbDnsName:
+    Type: String
+    Description: DNS name of the Public ALB (used as Moodle wwwroot).
+  DatabaseName:
+    AllowedPattern: ^([a-zA-Z0-9]*)$
+    Default: moodle
+    Description: Moodle database name
+    Type: String
+  DatabaseType:
+    AllowedValues:
+      - MySQL
+      - PostgreSQL
+    Default: MySQL
+    Description: Database engine type
+    Type: String
+  MoodleAdminUser:
+    AllowedPattern: ^([a-zA-Z0-9]*)$
+    Default: admin
+    Description: Moodle admin username
+    Type: String
+  MoodleAdminPassword:
+    AllowedPattern: ^[a-zA-Z0-9!@#%^&*()\-_+=.,;:]{8,}$
+    ConstraintDescription: "Min 8 chars. Allowed: letters, numbers, !@#%^&*()-_+=.,;: — No spaces, $, quotes or backslashes."
+    Default: <YOUR_ADMIN_PASSWORD>
+    Description: Moodle admin password (min 8 chars, change after first login)
+    MinLength: 8
+    NoEcho: true
+    Type: String
+  MoodleAdminEmail:
+    AllowedPattern: ^[a-zA-Z0-9+_.-]+@[a-zA-Z0-9.-]+$
+    Default: <YOUR_ADMIN_EMAIL>
+    Description: Moodle admin email address
+    Type: String
+  MoodleLocale:
+    Default: en
+    Description: Moodle language locale (e.g. en, es)
+    Type: String
 
 Conditions:
   NumberOfSubnets1: !Equals [ 1, !Ref NumberOfSubnets ]
@@ -250,7 +291,7 @@ Resources:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
       Cooldown: '60'
-      HealthCheckGracePeriod: 120
+      HealthCheckGracePeriod: 300
       HealthCheckType: ELB
       LaunchTemplate:
         LaunchTemplateId: !Ref WebLaunchTemplate
@@ -276,7 +317,7 @@ Resources:
     CreationPolicy:
       ResourceSignal:
         Count: !Ref WebAsgMin
-        Timeout: PT15M
+        Timeout: PT60M
         
   ScaleUpPolicy:
     Type: AWS::AutoScaling::ScalingPolicy
@@ -359,6 +400,7 @@ Resources:
               php8.1-pgsql: []
               php8.1-mysqlnd: []
               cronie: []
+              php8.1-zip: []
               php8.1-devel: []
               php-pear: []
               libzip: []
@@ -445,14 +487,46 @@ Resources:
                   Health Check
               mode: '000644'
               owner: root
-              group: root  
+              group: root
+            /tmp/fix_moodle_post.php:
+              content: |
+                <?php
+                $dsn = (getenv('DB_TYPE') === 'MySQL')
+                  ? 'mysql:host=' . getenv('DB_HOST') . ';dbname=' . getenv('DB_NAME')
+                  : 'pgsql:host=' . getenv('DB_HOST') . ';dbname=' . getenv('DB_NAME');
+                $pdo = new PDO($dsn, getenv('DB_USER'), getenv('DB_PASS'));
+                $pdo->exec('UPDATE mdl_config SET value=0 WHERE name="cookiesecure"');
+                echo "cookiesecure fixed\n";
+              mode: '000644'
+              owner: root
+              group: root
+            /tmp/gen_moodle_config.php:
+              content: |
+                <?php
+                $cfg = "<?php\n"
+                  . "unset(\$CFG); global \$CFG; \$CFG = new stdClass();\n"
+                  . "\$CFG->dbtype    = 'mysqli';\n"
+                  . "\$CFG->dblibrary = 'native';\n"
+                  . "\$CFG->dbhost    = '" . getenv('DB_HOST') . "';\n"
+                  . "\$CFG->dbname    = '" . getenv('DB_NAME') . "';\n"
+                  . "\$CFG->dbuser    = '" . getenv('DB_USER') . "';\n"
+                  . "\$CFG->dbpass    = '" . getenv('DB_PASS') . "';\n"
+                  . "\$CFG->prefix    = 'mdl_';\n"
+                  . "\$CFG->dboptions = array('dbpersist'=>0,'dbport'=>'','dbsocket'=>'','dbcollation'=>'utf8mb4_0900_ai_ci');\n"
+                  . "\$CFG->wwwroot   = '" . getenv('WWWROOT') . "';\n"
+                  . "\$CFG->dataroot  = '/var/www/moodle/data';\n"
+                  . "\$CFG->admin     = 'admin';\n"
+                  . "\$CFG->directorypermissions = 02777;\n"
+                  . "require_once(__DIR__ . '/lib/setup.php');\n";
+                file_put_contents('/var/www/moodle/html/config.php', $cfg);
+                chown('/var/www/moodle/html/config.php', 'apache');
+                echo "config.php generated\n";
+              mode: '000644'
+              owner: root
+              group: root
             /tmp/create_site_conf.sh:
               content: !Sub |
                 #!/bin/bash -xe
-
-                # Below to be able to compile zip.so for the PHP Zip library that's not in the available packages...
-                pecl install zip
-                echo "extension=zip.so;" > /etc/php.d/50-zip.ini
 
                 # Install Sodium
                 pecl install -f libsodium
@@ -544,6 +618,120 @@ Resources:
                   mount -t nfs4 -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2 $EnvElasticFileSystem.efs.${AWS::Region}.amazonaws.com:/data /var/www/moodle/data
                   #mount -t nfs4 -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2 $EnvElasticFileSystem.efs.${AWS::Region}.amazonaws.com:/cache /var/www/moodle/cache
                   #mount -t nfs4 -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2 $EnvElasticFileSystem.efs.${AWS::Region}.amazonaws.com:/temp /var/www/moodle/temp
+                fi
+
+                # Download and extract Moodle directly (no CodePipeline required)
+                if [ ! -f /var/www/moodle/html/index.php ]; then
+                  wget -O /tmp/moodle.tgz ${MoodleDirectDownloadURL}
+                  tar -xvzf /tmp/moodle.tgz --strip-components=1 -C /var/www/moodle/html/
+                  chown -R apache:apache /var/www/moodle/html/
+                  rm -f /tmp/moodle.tgz
+                fi
+
+                # ============================================================
+                # AUTO-INSTALL MOODLE via CLI (only if not already installed)
+                # ============================================================
+                if [ ! -f /var/www/moodle/html/config.php ]; then
+                  echo "Starting automated Moodle CLI installation..."
+
+                  # Fix directory permissions required by CLI installer
+                  chown apache:apache /var/www/moodle
+                  chmod 755 /var/www/moodle
+                  chown apache:apache /var/www/.opcache
+                  chmod 755 /var/www/.opcache
+
+                  region=$(ec2-metadata -z | awk '{print $2}' | sed 's/[a-z]$//')
+
+                  # Wait for DB endpoint SSM parameter (up to 10 min)
+                  DB_HOST=""
+                  for i in $(seq 1 20); do
+                    DB_HOST=$(aws ssm get-parameter \
+                      --name /Moodle/${ProjectName}/DB/ClusterEndpoint \
+                      --region $region --query Parameter.Value --output text 2>/dev/null || true)
+                    [ -n "$DB_HOST" ] && break
+                    echo "Waiting for DB SSM parameter (attempt $i/20)..."
+                    sleep 30
+                  done
+                  if [ -z "$DB_HOST" ]; then
+                    echo "ERROR: DB endpoint not found after waiting. Aborting."
+                    exit 1
+                  fi
+
+                  # Get DB credentials from Secrets Manager
+                  DB_SECRET=$(aws secretsmanager get-secret-value \
+                    --secret-id ${RDSInstanceSecretArn} \
+                    --region $region --query SecretString --output text)
+                  DB_USER=$(echo "$DB_SECRET" | python3 -c "import sys,json; print(json.load(sys.stdin)['username'])")
+                  DB_PASS=$(echo "$DB_SECRET" | python3 -c "import sys,json; print(json.load(sys.stdin)['password'])")
+
+                  # Wait for DB to accept connections (up to 10 min)
+                  DB_READY=0
+                  for i in $(seq 1 20); do
+                    U="$DB_USER" P="$DB_PASS" php -d opcache.enable=0 \
+                      -r "\$p=new PDO('mysql:host=$DB_HOST;dbname=${DatabaseName}',getenv('U'),getenv('P'));" \
+                      2>/dev/null && DB_READY=1 && break
+                    echo "Waiting for DB connection (attempt $i/20)..."
+                    sleep 30
+                  done
+                  if [ "$DB_READY" != "1" ]; then
+                    echo "ERROR: Could not connect to DB after waiting. Aborting."
+                    exit 1
+                  fi
+
+                  # Build wwwroot in lowercase to prevent Chrome redirect loop
+                  WWWROOT=$(echo "http://${PublicAlbDnsName}" | tr '[:upper:]' '[:lower:]')
+
+                  # Select DB driver
+                  DBTYPE="mysqli"
+                  [ "${DatabaseType}" = "PostgreSQL" ] && DBTYPE="pgsql"
+
+                  # Check if DB already has Moodle tables (another instance may have installed)
+                  DB_TABLE_COUNT=$(U="$DB_USER" P="$DB_PASS" php -d opcache.enable=0 \
+                    -r "\$p=new PDO('mysql:host=$DB_HOST;dbname=${DatabaseName}',getenv('U'),getenv('P')); echo \$p->query('SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=\"${DatabaseName}\" AND table_name LIKE \"mdl_%\"')->fetchColumn();" \
+                    2>/dev/null || echo "0")
+                  if [ "$DB_TABLE_COUNT" -gt "10" ]; then
+                    echo "Moodle DB already populated ($DB_TABLE_COUNT tables). Regenerating config.php..."
+                    DB_HOST="$DB_HOST" DB_NAME="${DatabaseName}" DB_USER="$DB_USER" \
+                      DB_PASS="$DB_PASS" WWWROOT="$WWWROOT" \
+                      php -d opcache.enable=0 /tmp/gen_moodle_config.php
+                  else
+                    echo "DB empty, proceeding with CLI installation..."
+                  fi
+
+                fi
+
+                # Re-check after DB verification (skip install if config.php now exists)
+                if [ ! -f /var/www/moodle/html/config.php ]; then
+
+                  # Run Moodle CLI installer
+                  sudo -u apache php -d opcache.enable=0 -d opcache.file_cache_only=0 \
+                    /var/www/moodle/html/admin/cli/install.php \
+                    --chmod=2777 \
+                    --lang=${MoodleLocale} \
+                    --wwwroot="$WWWROOT" \
+                    --dataroot=/var/www/moodle/data \
+                    --dbtype=$DBTYPE \
+                    --dbhost="$DB_HOST" \
+                    --dbname=${DatabaseName} \
+                    --dbuser="$DB_USER" \
+                    --dbpass="$DB_PASS" \
+                    --prefix=mdl_ \
+                    --fullname="Moodle" \
+                    --shortname="moodle" \
+                    --adminuser="${MoodleAdminUser}" \
+                    --adminpass="${MoodleAdminPassword}" \
+                    --adminemail="${MoodleAdminEmail}" \
+                    --agree-license \
+                    --non-interactive
+
+                  # Fix cookiesecure=0 (site runs on HTTP, not HTTPS)
+                  DB_HOST="$DB_HOST" DB_NAME="${DatabaseName}" DB_USER="$DB_USER" \
+                    DB_PASS="$DB_PASS" DB_TYPE="${DatabaseType}" \
+                    php -d opcache.enable=0 /tmp/fix_moodle_post.php
+
+                  echo "Moodle installation completed successfully."
+                else
+                  echo "Moodle config.php already exists, skipping installation."
                 fi
 
                 cp /tmp/status.txt /var/www/moodle/html/status.txt
