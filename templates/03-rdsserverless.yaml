@@ -82,6 +82,7 @@ Resources:
       DatabaseName: !Ref DatabaseName
       DBSubnetGroupName: !Ref DataSubnetGroup
       Engine: !If [ UsePostgreSQL, aurora-postgresql, aurora-mysql ]
+      EngineVersion: !If [ UsePostgreSQL, '16.4', '8.0.mysql_aurora.3.08.0' ]
       Port: !If [ UsePostgreSQL, 5432, 3306 ]
       KmsKeyId: !If [ UseAWS-ManagedCMK, !Ref 'AWS::NoValue', !Ref DatabaseCmk ]
       MasterUsername: !Join ['', ['{{resolve:secretsmanager:', !Ref RDSInstanceSecretArn, ':SecretString:username}}' ]]
