@@ -5,6 +5,10 @@
 <a name="english"></a>
 # aws-refarch-moodle — Free Tier Edition
 
+## 🧑‍💻 About this project
+
+This project was built as a hands-on learning exercise in AWS infrastructure. I fixed a broken enterprise-grade CloudFormation stack to make it work on AWS Free Tier — discovering and solving 5 root causes through 14 deployment attempts. Tools used: AWS CloudFormation, EC2, RDS, ELB, EFS, ElastiCache, SSM, Python, Bash, Git.
+
 ## 1. What is this repository?
 
 This is a fork of the official AWS reference architecture for Moodle ([aws-samples/aws-refarch-moodle](https://github.com/aws-samples/aws-refarch-moodle)), **fixed to work on AWS Free Tier accounts**. Launch the CloudFormation stack, wait ~40 minutes, and Moodle 4.5 LTS is installed and ready — no manual steps required.
@@ -98,6 +102,10 @@ This fork adds Free Tier compatibility and automated Moodle installation. See [`
 
 <a name="español"></a>
 # aws-refarch-moodle — Edición Free Tier
+
+## 🧑‍💻 Sobre este proyecto
+
+Este proyecto fue creado como un ejercicio práctico de aprendizaje en infraestructura de AWS. Corregí un stack de CloudFormation diseñado para empresas Entrepise para que funcionara en AWS Free Tier — Se econtró y resolvió 5 causas raíz después de 14 intentos de despliegue. Herramientas usadas: AWS CloudFormation, EC2, RDS, ELB, EFS, ElastiCache, SSM, Python, Bash, Git.
 
 ## 1. ¿Qué es este repositorio?
 
